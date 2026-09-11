@@ -8,7 +8,7 @@ This repository contains the current fixed-budget ALIT experiment only:
 - L1 coefficient: 3.0;
 - effective LPIPS coefficient: 0.6;
 - 20 epochs on 8 H200 GPUs;
-- batch 24 per GPU, accumulation 1, effective global batch 192.
+- automatic first-run probing for the largest safe per-GPU H200 batch.
 
 The training starts from the official ALIT-small quantized EMA and VQGAN
 checkpoints. It does not resume the previous five-epoch checkpoint.
@@ -54,7 +54,29 @@ wandb login
 
 To disable W&B, append `--no-wandb` to the training command.
 
-## 4. Train on 8 H200 GPUs
+## 4. Probe H200 batch size
+
+Before the first formal run, probe the real eight-GPU configuration:
+
+```bash
+export TORCH_HOME="$PWD/weights/torch"
+
+python scripts/probe_h200_batch.py \
+  --data-path /path/to/imagenet/train
+```
+
+The probe starts at per-GPU batch 96. OOM reduces the batch in a fresh process;
+a successful attempt below 90% reserved-memory utilization increases it. Once
+success and OOM bounds exist, it binary-searches between them. Every attempt
+runs one complete full-GAN generator/discriminator forward and backward on all
+eight GPUs and writes no checkpoint. The selected setting and measured peak are
+written to `/tmp/motalit_h200_batch_probe/recommended.json`.
+
+There is no fixed target global batch. The recommendation always uses
+`--accum-steps 1`. The default search range is 1 through 256 and can be changed
+with `--min-batch-size` and `--max-batch-size`.
+
+## 5. Train on 8 H200 GPUs
 
 Run from the repository root and replace the ImageNet path:
 
@@ -69,12 +91,15 @@ torchrun --standalone --nproc_per_node=8 \
   --config configs/h200_alit64_fixed64_l1_3_20epoch.yaml \
   --data-path /path/to/imagenet/train \
   --alit-ckpt weights/alit_vqgan_small_quantized_latent.pth \
-  --vqgan-ckpt weights/vqgan.ckpt
+  --vqgan-ckpt weights/vqgan.ckpt \
+  --batch-size 24 --accum-steps 1
 ```
 
-The schedule is epoch-based. With ImageNet-1K train and global batch 192, it
-uses 6,672 optimizer updates per epoch and 133,440 updates in total. Router-only
-training ends at epoch 0.5. Joint reconstruction starts at epoch 0.5. The D-only
+Replace `24` with `batch_size` from `recommended.json`; keep accumulation at 1.
+
+The schedule is epoch-based, so optimizer updates per epoch are derived from the
+probed batch. Router-only training ends at epoch 0.5. Joint reconstruction
+starts at epoch 0.5. The D-only
 warmup starts at epoch 1.5 and lasts 0.01 epoch, followed by full GAN and feature
 matching. Generator learning rates use cosine decay over all 20 epochs.
 
@@ -84,20 +109,21 @@ unavailable.
 
 ## Resume
 
-Use the same global batch and append:
+Use the same per-GPU batch and GPU count, then append:
 
 ```bash
 --resume results/alit64_vqgan_mix_fixed64_l1_3_h200_20epoch/latest.pt
 ```
 
-Changing the global batch changes `steps_per_epoch`, so exact data-cursor resume
-is intentionally rejected.
+Changing either value changes `steps_per_epoch`, so exact data-cursor resume is
+intentionally rejected.
 
 ## Quick checks
 
 ```bash
 python -m unittest discover -s tests -v
 python scripts/download_weights.py --check-only
+python scripts/probe_h200_batch.py --data-path /path/to/imagenet/train --dry-run
 ```
 
 For a no-checkpoint single-GPU smoke after preparing weights, use:

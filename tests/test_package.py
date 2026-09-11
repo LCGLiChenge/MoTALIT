@@ -9,6 +9,7 @@ from experiments.alit_vqgan_mix.train_mot_fixed96_5epoch import (
     parse_args,
     reconstruction_loss,
 )
+from scripts.probe_h200_batch import midpoint, parse_csv_ints
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +29,7 @@ class H200PackageTest(unittest.TestCase):
         with patch.object(sys, "argv", argv):
             args = parse_args()
         self.assertEqual((args.alit_tokens, args.refine_tokens), (64, 64))
-        self.assertEqual(args.batch_size * args.accum_steps * 8, 192)
+        self.assertEqual((args.batch_size, args.accum_steps), (24, 1))
         self.assertEqual(args.epochs, 20)
         self.assertEqual(args.lambda_l1, 3.0)
         self.assertAlmostEqual(args.lambda_mix * args.lambda_lpips, 0.6)
@@ -43,7 +44,11 @@ class H200PackageTest(unittest.TestCase):
         ]
         self.assertTrue(all(path.is_file() for path in required))
 
+    def test_batch_probe_helpers(self):
+        self.assertEqual(parse_csv_ints("0,1,7", minimum=0), [0, 1, 7])
+        self.assertEqual(midpoint(24, 48), 36)
+        self.assertEqual(midpoint(36, 48), 42)
+
 
 if __name__ == "__main__":
     unittest.main()
-

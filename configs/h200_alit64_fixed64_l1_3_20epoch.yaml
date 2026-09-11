@@ -5,7 +5,7 @@ resume: ''
 reset_optimizer: false
 image_size: 256
 
-# 24 x 8 GPUs x accumulation 1 = global batch 192, matching the 5090 run.
+# Fallback only. The first H200 run probes and overrides the largest safe batch.
 batch_size: 24
 accum_steps: 1
 epochs: 20
