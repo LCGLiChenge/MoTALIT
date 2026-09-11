@@ -1,0 +1,16 @@
+# CUDA-enabled torch and torchvision are expected from the server environment.
+einops
+gdown
+numpy
+omegaconf
+open_clip_torch
+Pillow
+pytorch-lightning
+PyYAML
+requests
+safetensors
+timm
+torchpq
+tqdm
+wandb
+

@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.idea/
+.vscode/
+.DS_Store
+
+weights/
+results/
+wandb/
+*.pt
+*.pth
+*.ckpt
+*.tmp
+
