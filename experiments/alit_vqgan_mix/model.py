@@ -221,8 +221,8 @@ class MoTAlignedALITVQGANMix(ALITVQGANMix):
 
     def __init__(self, alit: nn.Module, router_hidden_dim=128, router_depth=3,
                  router_detach_inputs=True, alit_tokens=32):
-        if alit_tokens not in (32, 64):
-            raise ValueError("MoT-aligned ALIT supports native 32- or 64-token budgets")
+        if alit_tokens not in (32, 64, 128):
+            raise ValueError("MoT-aligned ALIT supports native 32-, 64-, or 128-token budgets")
         super().__init__(
             alit,
             router_hidden_dim=router_hidden_dim,

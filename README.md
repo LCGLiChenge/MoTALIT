@@ -1,14 +1,17 @@
-# MoT-ALIT 64+64
+# MoT-ALIT 128-token experiments
 
-This repository contains the current fixed-budget ALIT experiment only:
+This repository contains the main fixed-budget ALIT experiment:
 
 - 64 official recurrent ALIT tokens;
 - exactly 64 Router-selected native VQGAN grids;
 - total budget: 128 tokens;
+- matched ablation: 128 recurrent ALIT tokens and zero 2D refinement tokens;
 - L1 coefficient: 3.0;
 - effective LPIPS coefficient: 0.6;
 - 20 epochs on 8 H200 GPUs;
 - automatic first-run probing for the largest safe per-GPU H200 batch.
+
+A matched ablation uses 128 recurrent ALIT tokens and zero 2D refinement tokens.
 
 The training starts from the official ALIT-small quantized EMA and VQGAN
 checkpoints. It does not resume the previous five-epoch checkpoint.
@@ -106,6 +109,38 @@ matching. Generator learning rates use cosine decay over all 20 epochs.
 `latest.pt` is updated at every epoch. Numbered snapshots are written at epochs
 10 and 20 only. Local JSONL logs remain in the output directory even if W&B is
 unavailable.
+
+## 6. Train the 128+0 ablation
+
+This run changes only `alit_tokens: 128` and `refine_tokens: 0`. Output and W&B
+names are separate; every optimization, loss, discriminator and schedule value
+matches the 64+64 configuration.
+
+Probe its full-GAN memory footprint first because four ALIT rollouts use a
+different peak than the 64+64 model:
+
+```bash
+python scripts/probe_h200_batch.py \
+  --config configs/h200_alit128_fixed0_l1_3_20epoch.yaml \
+  --data-path /path/to/imagenet/train
+```
+
+Then replace `BATCH_FROM_PROBE` with `batch_size` from `recommended.json`:
+
+```bash
+export TORCH_HOME="$PWD/weights/torch"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export OMP_NUM_THREADS=4
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+torchrun --standalone --nproc_per_node=8 \
+  experiments/alit_vqgan_mix/train_mot_fixed96_5epoch.py \
+  --config configs/h200_alit128_fixed0_l1_3_20epoch.yaml \
+  --data-path /path/to/imagenet/train \
+  --alit-ckpt weights/alit_vqgan_small_quantized_latent.pth \
+  --vqgan-ckpt weights/vqgan.ckpt \
+  --batch-size BATCH_FROM_PROBE --accum-steps 1
+```
 
 ## Resume
 

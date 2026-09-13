@@ -579,11 +579,14 @@ def main(args):
             for name, parameter in model_core.named_parameters():
                 if name not in model_core.mot_trainable_names and parameter.grad is not None:
                     raise RuntimeError(f"frozen 1D parameter received a gradient: {name}")
+            roles_without_expected_grad = {"vqgan_codebook"}
+            if args.refine_tokens == 0:
+                roles_without_expected_grad.add("vqgan_encoder")
             for group in optimizer.param_groups:
                 if router_only and group["lr_role"] != "router":
                     if any(p.grad is not None for p in group["params"]):
                         raise RuntimeError("non-Router gradient during Router-only")
-                elif group["lr_role"] != "vqgan_codebook":
+                elif group["lr_role"] not in roles_without_expected_grad:
                     if not any(p.grad is not None and bool(torch.any(p.grad != 0)) for p in group["params"]):
                         raise RuntimeError(f"missing gradients for {group['lr_role']}")
         optimizer.step()
@@ -699,7 +702,7 @@ def parse_args():
     add("--random-flip", action=argparse.BooleanOptionalAction, default=config.get("random_flip", False))
     add("--mixed-precision", choices=["bf16", "fp16", "none"], default=config.get("mixed_precision", "bf16"))
     add("--seed", type=int, default=config.get("seed", 0))
-    add("--alit-tokens", type=int, choices=(32, 64), default=config.get("alit_tokens", 32))
+    add("--alit-tokens", type=int, choices=(32, 64, 128), default=config.get("alit_tokens", 32))
     add("--refine-tokens", type=int, default=config.get("refine_tokens", 96))
     add("--native-decode-chunk", type=int, default=config.get("native_decode_chunk", 4))
     add("--router-hidden-dim", type=int, default=config.get("router_hidden_dim", 128))
@@ -766,6 +769,8 @@ def parse_args():
     args = parser.parse_args()
     if args.lambda_l1 < 0.0:
         parser.error("--lambda-l1 must be non-negative")
+    if not 0 <= args.refine_tokens <= 256:
+        parser.error("--refine-tokens must be between 0 and 256")
     if args.save_epoch_every < 0:
         parser.error("--save-epoch-every must be non-negative")
     if args.smoke_no_save and args.smoke_steps <= 0:
