@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Probe a high-utilization per-GPU batch with complete GAN training steps."""
+"""Probe the largest per-GPU batch that preserves a fixed memory reserve."""
 
 from __future__ import annotations
 
@@ -29,6 +29,10 @@ def parse_csv_ints(value: str, minimum: int = 1) -> list[int]:
 
 def midpoint(low: int, high: int) -> int:
     return (low + high) // 2
+
+
+def within_memory_budget(peak_gib: float, total_gib: float, reserve_gib: float) -> bool:
+    return peak_gib <= total_gib - reserve_gib
 
 
 def selected_gpu_total_gib(gpu_ids: list[int]) -> float:
@@ -71,6 +75,10 @@ def probe_command(args, gpu_ids: list[int], batch_size: int, output_dir: Path) -
         str(Path(args.vqgan_ckpt).resolve()),
         "--output-dir",
         str(output_dir),
+        "--alit-tokens",
+        str(args.alit_tokens),
+        "--refine-tokens",
+        str(args.refine_tokens),
         "--batch-size",
         str(batch_size),
         "--accum-steps",
@@ -97,7 +105,7 @@ def probe_command(args, gpu_ids: list[int], batch_size: int, output_dir: Path) -
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/h200_alit64_fixed64_l1_3_20epoch.yaml")
+    parser.add_argument("--config", default="configs/h200_budget_sweep_l1_3_10epoch.yaml")
     parser.add_argument("--data-path", required=True)
     parser.add_argument("--alit-ckpt", default="weights/alit_vqgan_small_quantized_latent.pth")
     parser.add_argument("--vqgan-ckpt", default="weights/vqgan.ckpt")
@@ -105,7 +113,9 @@ def main() -> None:
     parser.add_argument("--initial-batch-size", type=int, default=96)
     parser.add_argument("--min-batch-size", type=int, default=1)
     parser.add_argument("--max-batch-size", type=int, default=256)
-    parser.add_argument("--target-memory-utilization", type=float, default=0.90)
+    parser.add_argument("--reserve-memory-gib", type=float, default=8.0)
+    parser.add_argument("--alit-tokens", type=int, choices=(32, 64, 96, 128), default=128)
+    parser.add_argument("--refine-tokens", type=int, default=0)
     parser.add_argument("--output-root", type=Path, default=Path("/tmp/motalit_h200_batch_probe"))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -115,8 +125,10 @@ def main() -> None:
         raise ValueError("GPU IDs must be distinct")
     if not 1 <= args.min_batch_size <= args.initial_batch_size <= args.max_batch_size:
         raise ValueError("require 1 <= min_batch_size <= initial_batch_size <= max_batch_size")
-    if not 0.0 < args.target_memory_utilization <= 1.0:
-        raise ValueError("target_memory_utilization must be in (0, 1]")
+    if args.refine_tokens < 0 or args.alit_tokens + args.refine_tokens != 128:
+        raise ValueError("alit_tokens + refine_tokens must equal 128")
+    if args.reserve_memory_gib <= 0:
+        raise ValueError("reserve_memory_gib must be positive")
 
     environment = os.environ.copy()
     environment["CUDA_VISIBLE_DEVICES"] = ",".join(str(item) for item in gpu_ids)
@@ -127,7 +139,8 @@ def main() -> None:
     if args.dry_run:
         print(json.dumps({
             "initial_batch_size": args.initial_batch_size,
-            "target_memory_utilization": args.target_memory_utilization,
+            "reserve_memory_gib": args.reserve_memory_gib,
+            "budget": f"{args.alit_tokens}+{args.refine_tokens}",
             "command": probe_command(
                 args,
                 gpu_ids,
@@ -138,11 +151,18 @@ def main() -> None:
         return
 
     total_gib = selected_gpu_total_gib(gpu_ids)
-    lower_success = 0
-    upper_oom = None
+    if args.reserve_memory_gib >= total_gib:
+        raise ValueError(
+            f"reserve_memory_gib={args.reserve_memory_gib:g} must be smaller than "
+            f"the selected GPU capacity ({total_gib:.2f} GiB)"
+        )
+    target_peak_gib = total_gib - args.reserve_memory_gib
+    lower_safe = 0
+    upper_unsafe = None
     batch_size = args.initial_batch_size
     best = None
     tested = set()
+
     while batch_size not in tested:
         tested.add(batch_size)
         output_dir = run_root / f"bs{batch_size}"
@@ -160,52 +180,82 @@ def main() -> None:
                 text=True,
             )
         output = log_path.read_text(errors="replace")
+
         if process.returncode == 0:
             peak_gib = peak_reserved_gib(output_dir)
             utilization = peak_gib / total_gib
-            best = {
-                "batch_size": batch_size,
-                "accum_steps": 1,
-                "world_size": len(gpu_ids),
-                "global_batch": batch_size * len(gpu_ids),
-                "peak_reserved_gib": peak_gib,
-                "gpu_total_gib": total_gib,
-                "memory_utilization": utilization,
-                "probe_log": str(log_path),
-            }
-            lower_success = max(lower_success, batch_size)
-            print(f"batch_size={batch_size} succeeded at {utilization:.1%} reserved memory", flush=True)
-            if upper_oom is not None:
-                if upper_oom - lower_success <= 1:
+            headroom_gib = total_gib - peak_gib
+            if within_memory_budget(peak_gib, total_gib, args.reserve_memory_gib):
+                best = {
+                    "batch_size": batch_size,
+                    "accum_steps": 1,
+                    "world_size": len(gpu_ids),
+                    "global_batch": batch_size * len(gpu_ids),
+                    "alit_tokens": args.alit_tokens,
+                    "refine_tokens": args.refine_tokens,
+                    "peak_reserved_gib": peak_gib,
+                    "gpu_total_gib": total_gib,
+                    "memory_headroom_gib": headroom_gib,
+                    "reserve_memory_gib": args.reserve_memory_gib,
+                    "target_peak_reserved_gib": target_peak_gib,
+                    "memory_utilization": utilization,
+                    "probe_log": str(log_path),
+                }
+                lower_safe = max(lower_safe, batch_size)
+                print(
+                    f"batch_size={batch_size} is safe: {peak_gib:.2f}/{total_gib:.2f} GiB "
+                    f"reserved, {headroom_gib:.2f} GiB headroom",
+                    flush=True,
+                )
+                if upper_unsafe is not None:
+                    if upper_unsafe - lower_safe <= 1:
+                        break
+                    batch_size = midpoint(lower_safe, upper_unsafe)
+                else:
+                    next_batch = min(
+                        args.max_batch_size,
+                        max(batch_size + 1, batch_size * 5 // 4),
+                    )
+                    if next_batch == batch_size:
+                        break
+                    batch_size = next_batch
+                continue
+
+            upper_unsafe = batch_size if upper_unsafe is None else min(upper_unsafe, batch_size)
+            print(
+                f"batch_size={batch_size} ran but leaves only {headroom_gib:.2f} GiB; "
+                f"need {args.reserve_memory_gib:.2f} GiB",
+                flush=True,
+            )
+            if lower_safe:
+                if upper_unsafe - lower_safe <= 1:
                     break
-                batch_size = midpoint(lower_success, upper_oom)
-            elif utilization >= args.target_memory_utilization:
-                break
+                batch_size = midpoint(lower_safe, upper_unsafe)
             else:
-                next_batch = min(args.max_batch_size, max(batch_size + 1, batch_size * 5 // 4))
-                if next_batch == batch_size:
+                if batch_size <= args.min_batch_size:
                     break
-                batch_size = next_batch
+                batch_size = max(args.min_batch_size, batch_size // 2)
             continue
 
         lowered = output.lower()
         if not any(marker in lowered for marker in OOM_MARKERS):
             tail = "\n".join(output.splitlines()[-40:])
             raise RuntimeError(f"batch probe failed for a non-OOM reason; inspect {log_path}\n{tail}")
-        upper_oom = batch_size if upper_oom is None else min(upper_oom, batch_size)
+        upper_unsafe = batch_size if upper_unsafe is None else min(upper_unsafe, batch_size)
         print(f"batch_size={batch_size} OOM; reducing in a fresh process", flush=True)
-        if lower_success:
-            if upper_oom - lower_success <= 1:
+        if lower_safe:
+            if upper_unsafe - lower_safe <= 1:
                 break
-            batch_size = midpoint(lower_success, upper_oom)
+            batch_size = midpoint(lower_safe, upper_unsafe)
         else:
             if batch_size <= args.min_batch_size:
                 break
             batch_size = max(args.min_batch_size, batch_size // 2)
 
     if best is None:
-        raise RuntimeError("even the minimum batch size ran out of memory")
+        raise RuntimeError("even the minimum batch size cannot preserve the requested memory reserve")
     result_path = args.output_root / "recommended.json"
+    result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(best, indent=2) + "\n")
     print(json.dumps(best, indent=2))
     print(f"Use these overrides for formal training: --batch-size {best['batch_size']} --accum-steps 1")

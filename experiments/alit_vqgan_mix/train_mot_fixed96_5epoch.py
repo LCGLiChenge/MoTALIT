@@ -417,6 +417,7 @@ def main(args):
         out_dir.mkdir(parents=True, exist_ok=True)
     if distributed:
         dist.barrier()
+    latest_path = out_dir / args.latest_filename
     log_path = out_dir / "log.txt"
     wandb_run = init_wandb(args, is_main)
     pbar = tqdm(
@@ -635,7 +636,7 @@ def main(args):
             epoch_end = step % steps_per_epoch == 0
             if not args.smoke_no_save and args.latest_every > 0 and step % args.latest_every == 0:
                 save_checkpoint(
-                    out_dir / "latest.pt", model_core,
+                    latest_path, model_core,
                     discriminator.module if distributed else discriminator,
                     optimizer, optimizer_d, ema, step, step / steps_per_epoch, args, True, lecam_real, lecam_fake,
                 )
@@ -649,7 +650,7 @@ def main(args):
                             optimizer, optimizer_d, ema, step, float(epoch_index), args, True, lecam_real, lecam_fake,
                         )
                     save_checkpoint(
-                        out_dir / "latest.pt", model_core,
+                        latest_path, model_core,
                         discriminator.module if distributed else discriminator,
                         optimizer, optimizer_d, ema, step, float(epoch_index), args, True, lecam_real, lecam_fake,
                     )
@@ -659,7 +660,7 @@ def main(args):
     if is_main:
         if not args.smoke_no_save:
             save_checkpoint(
-                out_dir / "latest.pt", model.module if distributed else model,
+                latest_path, model.module if distributed else model,
                 discriminator.module if distributed else discriminator,
                 optimizer, optimizer_d, ema, stop_step, stop_step / steps_per_epoch, args, True, lecam_real, lecam_fake,
             )
@@ -702,7 +703,7 @@ def parse_args():
     add("--random-flip", action=argparse.BooleanOptionalAction, default=config.get("random_flip", False))
     add("--mixed-precision", choices=["bf16", "fp16", "none"], default=config.get("mixed_precision", "bf16"))
     add("--seed", type=int, default=config.get("seed", 0))
-    add("--alit-tokens", type=int, choices=(32, 64, 128), default=config.get("alit_tokens", 32))
+    add("--alit-tokens", type=int, choices=(32, 64, 96, 128), default=config.get("alit_tokens", 32))
     add("--refine-tokens", type=int, default=config.get("refine_tokens", 96))
     add("--native-decode-chunk", type=int, default=config.get("native_decode_chunk", 4))
     add("--router-hidden-dim", type=int, default=config.get("router_hidden_dim", 128))
@@ -761,6 +762,7 @@ def parse_args():
     add("--clip-feat-normalize", action=argparse.BooleanOptionalAction, default=config.get("clip_feat_normalize", True))
     add("--llamagen-root", default=config.get("llamagen_root", "/home/heyefei/lichenge/LlamaGen"))
     add("--latest-every", type=int, default=config.get("latest_every", 200))
+    add("--latest-filename", default=config.get("latest_filename", "latest.pt"))
     add("--save-epoch-every", type=int, default=config.get("save_epoch_every", 1))
     add("--log-every", type=int, default=config.get("log_every", 20))
     add("--wandb", action=argparse.BooleanOptionalAction, default=config.get("wandb", False))
@@ -773,6 +775,9 @@ def parse_args():
         parser.error("--refine-tokens must be between 0 and 256")
     if args.save_epoch_every < 0:
         parser.error("--save-epoch-every must be non-negative")
+    latest_path = Path(args.latest_filename)
+    if latest_path.name != args.latest_filename or latest_path.suffix != ".pt":
+        parser.error("--latest-filename must be a basename ending in .pt")
     if args.smoke_no_save and args.smoke_steps <= 0:
         parser.error("--smoke-no-save requires --smoke-steps")
     return args
