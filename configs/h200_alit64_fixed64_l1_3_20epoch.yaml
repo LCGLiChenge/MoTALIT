@@ -84,9 +84,9 @@ clip_feat_loss: l1
 clip_feat_normalize: true
 llamagen_root: third_party/llamagen
 
-# latest.pt is refreshed every epoch; only epochs 10 and 20 get numbered snapshots.
+# latest.pt is overwritten every epoch; no numbered snapshots are written.
 latest_every: 0
-save_epoch_every: 10
+save_epoch_every: 0
 log_every: 50
 wandb: true
 wandb_project: MoT

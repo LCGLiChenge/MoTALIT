@@ -37,7 +37,7 @@ class H200PackageTest(unittest.TestCase):
         self.assertEqual(args.lambda_l1, 3.0)
         self.assertAlmostEqual(args.lambda_mix * args.lambda_lpips, 0.6)
         self.assertAlmostEqual(float(reconstruction_loss(args, 2.0, 5.0)), 9.0)
-        self.assertEqual(config["save_epoch_every"], 10)
+        self.assertEqual(config["save_epoch_every"], 0)
 
     def test_vendored_runtime_sources_exist(self):
         required = [

@@ -84,7 +84,7 @@ clip_feat_normalize: true
 llamagen_root: third_party/llamagen
 
 latest_every: 0
-save_epoch_every: 10
+save_epoch_every: 0
 log_every: 50
 wandb: true
 wandb_project: MoT

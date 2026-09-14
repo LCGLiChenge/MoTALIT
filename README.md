@@ -106,9 +106,9 @@ starts at epoch 0.5. The D-only
 warmup starts at epoch 1.5 and lasts 0.01 epoch, followed by full GAN and feature
 matching. Generator learning rates use cosine decay over all 20 epochs.
 
-`latest.pt` is updated at every epoch. Numbered snapshots are written at epochs
-10 and 20 only. Local JSONL logs remain in the output directory even if W&B is
-unavailable.
+`latest.pt` is overwritten at every epoch and once at normal exit. No numbered
+or intermediate checkpoint files are written. Local JSONL logs remain in the
+output directory even if W&B is unavailable.
 
 ## 6. Train the 128+0 ablation
 
